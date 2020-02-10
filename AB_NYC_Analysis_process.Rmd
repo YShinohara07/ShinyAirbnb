@@ -1,0 +1,186 @@
+---
+title: "Airbnb_Shiny"
+output: html_notebook
+---
+
+Load libraries
+```{r}
+library(tidyverse)
+library(dplyr)
+library(ggplot2)
+library(lubridate)
+library(leaflet)
+library(leaflet.extras)
+```
+
+Set working directory and load the data
+```{r}
+setwd('~/desktop/nyc-airbnb')
+raw = read.csv('AB_NYC_2019.csv',stringsAsFactors = F)
+```
+
+Step 0: Basic analysis
+```{r}
+names(raw)
+head(raw)
+unique(raw$neighbourhood_group)
+raw %>% group_by(neighbourhood) %>% summarise( count = n() ) #217 unique neighbourhood
+
+# Is it reasonable to filter out locations that shared their room once?
+raw %>% group_by(host_id) %>% summarise(count = n()) %>% filter(count == 1) %>% dim()
+# No, there are 32,303 unique host_id that shared their room once
+
+# Is it reasonable to filter out reviews <= 0
+raw %>% filter(number_of_reviews <= 0) %>% dim()
+# 10,052 rows, Not sure at the moment
+# Why would we want to keep this information? 
+```
+Step 0: Cleaning/Formating
+```{r}
+#Change neighborhood_group to boro
+raw = raw %>% rename( boro = neighbourhood_group)
+
+#Identify availability_365 = 0 and # reviews = 0
+no_business = raw %>% filter(availability_365 == 0, number_of_reviews == 0)
+#4,845 rows of no business
+raw = raw %>% filter(availability_365!=0, number_of_reviews!=0)
+# Does the reasons provide good rationale to justify that they provide no business?  Yes.
+
+
+# Add price room per night column
+raw = raw %>% mutate( price_night = price/minimum_nights )
+
+#Active locations? We are going to define active locations as a location with last review date was in 2019
+#convert to datetime format
+raw$last_review = as.Date(raw$last_review, '%Y-%m-%d')
+raw = raw %>% mutate(recent_year = as.numeric(year(last_review)))
+# count of year of review entries
+count_year = raw %>% group_by(recent_year) %>% summarise( count = n() )
+
+#Save as new file
+#write.csv(raw,'airbnb_nyc.csv')
+```
+
+Step 2: Analysis
+
+1. Relationship between price of location and boro.
+Appoarch: x = boro y1 = mean price y2 = median, proportion of prices between each boro
+```{r}
+# Average and median price for each boro
+boro_prices= raw %>% group_by(boro) %>%  summarise(Average=mean(price), Median=median(price))
+
+# Shiny bar plot Basic analysis: price comparisons of each boro 
+ggplot(boro_prices, aes(x=boro, y= Median ) )+ 
+  geom_bar(stat = 'identity', aes(fill = boro) ) +
+  ggtitle('Comparison between Price and Location') +
+  xlab('')+ theme(legend.title = element_blank(),
+                  legend.position = "none",
+                  plot.title = element_text(hjust = 0.5, size = 14))
+
+# Shiny density plot idea: make the graph interactive by having a zoom in
+ggplot(raw, aes(x=price) )+  geom_density(aes(color = boro) )+  
+  labs(color = "Location")+
+  xlim(0,250)
+
+
+### Same concept but using price_night###
+
+# Average and median price/night for each boro
+boro_prices_n = raw %>% group_by(boro) %>%  summarise(Average=mean(price_night), Median=median(price_night))
+# transpose the data
+# boro_prices_n = as.data.frame(t(as.matrix(boro_prices_n)))
+
+
+# Shiny bar plot Basic analysis: price/night comparisons of each boro 
+ggplot(boro_prices_n, aes(x= boro ) )+ 
+  geom_bar(stat = 'identity',aes(y = Median, fill = boro) ) +
+  ggtitle('Comparison between Price/night and Location') +
+  xlab('')+ theme(legend.title = element_blank(),
+                  legend.position = "none",
+                  plot.title = element_text(hjust = 0.5, size = 14))
+
+# Shiny density plot idea: make the graph interactive by having a zoom in
+ggplot(raw, aes(x=price_night) )+  geom_density(aes(color = boro) )+  
+  labs(color = "Location")+
+  xlim(0,250)
+```
+
+2. Relationship between price for each neighborhood. 
+
+```{r}
+# Average and median price/night of each neighbourhood
+neighbour_price_n = raw %>% group_by(neighbourhood, boro) %>% summarise(Average = mean(price_night), Median = median(price_night) )
+
+# What does this show???
+ggplot(neighbour_price_n, aes(x= Average, y= Median) ) + geom_point(aes(color = boro)) + xlim(0, 150) + ylim(0, 150)
+
+#Average price and price/night of each neighborhood
+neighbour_price_com = raw %>% select(boro, neighbourhood, price, price_night) %>% group_by( neighbourhood, boro) %>% summarise( avg_price = mean(price), avg_price_n = mean(price_night) )
+
+### Relationship between avg price and avg price/night for each boro ###
+# Plot the avg price, avg price/night of each neighboorhood then 
+ggplot(neighbour_price_com, aes(x= avg_price, y=avg_price_n)) +
+  geom_point(aes(color = boro) )+ 
+  #geom_smooth(aes( color=boro), se=F)+
+  xlab('Average Price')+ ylab('Average Price/night')+
+  xlim(25, 200) + ylim(0, 150)
+```
+
+What did we get when comparing average price and average? 
+
+3. Relationship of each boro based price with time
+```{r}
+#No set start/end time
+ggplot(raw, aes(x=last_review, y= price_night))+geom_smooth(aes( color= boro), se=F)
+# Looking at the raw data, there a signficantly lower amount of last_review during earlier years.
+
+#Only 2018-2019
+recent_data = raw %>% filter((year(last_review) == 2019) | (year(last_review) == 2018))
+ggplot(recent_data, aes(x=last_review, y=price_night))+geom_smooth(aes(color = boro), se=F )
+
+#Only 2019 because largest amount of volume
+recent_data = raw %>% filter(year(last_review)==2019)
+ggplot(recent_data, aes(x=last_review, y=price_night) )+geom_smooth(aes(color=boro),se=F)
+```
+
+4.Relationship of price/night with recent time for each neighborhood in each boro
+
+```{r}
+#Manhattan
+boro_data = recent_data %>% filter(boro=='Manhattan') %>%
+  select(boro, price, price_night, neighbourhood, last_review) %>% group_by(neighbourhood) %>% 
+  top_n(neighbourhood,n= 5)
+ggplot(boro_data, aes(x=last_review, y=price_night))+geom_point(aes(color=neighbourhood), se=F)
+```
+
+
+5. Heatmap based on price? Display a visual that displays locations with desired price range
+
+```{r}
+raw %>% 
+  group_by(latitude, longitude) %>% summarise( n())
+  leaflet() %>% addTiles() %>% 
+  addHeatmap(lng = ~longitude, lat = ~latitude, radius = 8)
+
+```
+
+
+6. How does avialability affect price? Is there a relationship between price and avialbility?
+sample = our data
+
+```{r}
+cor_pn_365=raw %>% select(price_night, availability_365) %>% cor()
+cor_raw = raw %>% select(price,price_night,minimum_nights,reviews_per_month,availability_365) %>% cor()
+library(corrplot)
+library(RColorBrewer)
+
+corrplot(cor_pn_365,type="upper", order="hclust",
+         col=brewer.pal(n=8, name="RdYlBu"))
+
+corrplot(cor_raw, method = 'pie',type = 'lower', order = 'hclust', 
+         col=brewer.pal(n=8, name="RdYlBu"))
+
+```
+
+
+

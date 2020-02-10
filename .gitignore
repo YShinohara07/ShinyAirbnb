@@ -1,0 +1,7 @@
+*.jpg
+*.csv
+/.Rproj.user/
+*.Rproj
+.Rhistory
+.DS_Store
+rsconnect/
